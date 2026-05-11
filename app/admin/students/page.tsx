@@ -27,39 +27,73 @@ export default async function StudentsPage({ searchParams }: PageProps) {
   let schedules: any[] = [];
   let loadError = "";
 
-  if (academy?.id) {
-    let studentsRequest = supabase
-      .from("students")
-      .select("*")
-      .eq("academy_id", academy.id)
-      .order("created_at", { ascending: false });
+if (academy?.id) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
-    if (status !== "all") {
-      studentsRequest = studentsRequest.eq("status", status);
+  let academyIds: string[] = [academy.id];
+
+  if (user?.id) {
+    const { data: ownedAcademies } = await supabase
+      .from("academy_settings")
+      .select("id")
+      .eq("owner_id", user.id);
+
+    const ids = safeArray(ownedAcademies)
+      .map((item: any) => item.id)
+      .filter(Boolean);
+
+    if (ids.length > 0) {
+      academyIds = ids;
     }
-
-    const [studentsRes, classesRes, subjectsRes, teachersRes, schedulesRes] =
-      await Promise.all([
-        studentsRequest,
-        supabase.from("classes").select("id, class_name").eq("academy_id", academy.id),
-        supabase.from("subjects").select("id, subject_name").eq("academy_id", academy.id),
-        supabase.from("teachers").select("id, full_name, teacher_code").eq("academy_id", academy.id),
-        supabase
-          .from("class_schedules")
-          .select("id, batch_name, start_time, end_time")
-          .eq("academy_id", academy.id),
-      ]);
-
-    if (studentsRes.error) {
-      loadError = studentsRes.error.message;
-    }
-
-    students = safeArray(studentsRes.data);
-    classes = safeArray(classesRes.data);
-    subjects = safeArray(subjectsRes.data);
-    teachers = safeArray(teachersRes.data);
-    schedules = safeArray(schedulesRes.data);
   }
+
+  let studentsRequest = supabase
+    .from("students")
+    .select("*")
+    .in("academy_id", academyIds)
+    .order("created_at", { ascending: false });
+
+  if (status !== "all") {
+    studentsRequest = studentsRequest.eq("status", status);
+  }
+
+  const [studentsRes, classesRes, subjectsRes, teachersRes, schedulesRes] =
+    await Promise.all([
+      studentsRequest,
+
+      supabase
+        .from("classes")
+        .select("id, class_name")
+        .in("academy_id", academyIds),
+
+      supabase
+        .from("subjects")
+        .select("id, subject_name")
+        .in("academy_id", academyIds),
+
+      supabase
+        .from("teachers")
+        .select("id, full_name, teacher_code")
+        .in("academy_id", academyIds),
+
+      supabase
+        .from("class_schedules")
+        .select("id, batch_name, start_time, end_time")
+        .in("academy_id", academyIds),
+    ]);
+
+  if (studentsRes.error) {
+    loadError = studentsRes.error.message;
+  }
+
+  students = safeArray(studentsRes.data);
+  classes = safeArray(classesRes.data);
+  subjects = safeArray(subjectsRes.data);
+  teachers = safeArray(teachersRes.data);
+  schedules = safeArray(schedulesRes.data);
+}
 
   const classMap = new Map(classes.map((item: any) => [item.id, item]));
   const subjectMap = new Map(subjects.map((item: any) => [item.id, item]));
