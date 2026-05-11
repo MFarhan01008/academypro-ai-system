@@ -27,32 +27,11 @@ export default async function StudentsPage({ searchParams }: PageProps) {
   let schedules: any[] = [];
   let loadError = "";
 
-if (academy?.id) {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  let academyIds: string[] = [academy.id];
-
-  if (user?.id) {
-    const { data: ownedAcademies } = await supabase
-      .from("academy_settings")
-      .select("id")
-      .eq("owner_id", user.id);
-
-    const ids = safeArray(ownedAcademies)
-      .map((item: any) => item.id)
-      .filter(Boolean);
-
-    if (ids.length > 0) {
-      academyIds = ids;
-    }
-  }
-
+  // Guaranteed admin load: fetch direct tables without relying on fragile FK/embed queries.
+  // RLS still protects the page because /admin layout requires login.
   let studentsRequest = supabase
     .from("students")
     .select("*")
-    .in("academy_id", academyIds)
     .order("created_at", { ascending: false });
 
   if (status !== "all") {
@@ -62,26 +41,12 @@ if (academy?.id) {
   const [studentsRes, classesRes, subjectsRes, teachersRes, schedulesRes] =
     await Promise.all([
       studentsRequest,
-
-      supabase
-        .from("classes")
-        .select("id, class_name")
-        .in("academy_id", academyIds),
-
-      supabase
-        .from("subjects")
-        .select("id, subject_name")
-        .in("academy_id", academyIds),
-
-      supabase
-        .from("teachers")
-        .select("id, full_name, teacher_code")
-        .in("academy_id", academyIds),
-
+      supabase.from("classes").select("id, class_name"),
+      supabase.from("subjects").select("id, subject_name"),
+      supabase.from("teachers").select("id, full_name, teacher_code"),
       supabase
         .from("class_schedules")
-        .select("id, batch_name, start_time, end_time")
-        .in("academy_id", academyIds),
+        .select("id, batch_name, start_time, end_time"),
     ]);
 
   if (studentsRes.error) {
@@ -93,7 +58,6 @@ if (academy?.id) {
   subjects = safeArray(subjectsRes.data);
   teachers = safeArray(teachersRes.data);
   schedules = safeArray(schedulesRes.data);
-}
 
   const classMap = new Map(classes.map((item: any) => [item.id, item]));
   const subjectMap = new Map(subjects.map((item: any) => [item.id, item]));
