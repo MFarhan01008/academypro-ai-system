@@ -2,10 +2,15 @@ import Link from "next/link";
 import { getCurrentUserAndAcademy } from "@/lib/admin-data";
 import { formatPKR, makeStudentCode } from "@/lib/utils";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
+
 type PageProps = {
   searchParams?: Promise<{
     q?: string;
     status?: string;
+    debug?: string;
   }>;
 };
 
@@ -13,10 +18,20 @@ function safeArray<T = any>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : [];
 }
 
+function shortProjectId(url?: string) {
+  if (!url) return "missing";
+  try {
+    return new URL(url).hostname.replace(".supabase.co", "");
+  } catch {
+    return url;
+  }
+}
+
 export default async function StudentsPage({ searchParams }: PageProps) {
   const params = searchParams ? await searchParams : {};
   const query = (params.q || "").trim();
   const status = params.status || "all";
+  const showDebug = params.debug === "1";
 
   const { supabase, academy } = await getCurrentUserAndAcademy();
 
@@ -27,8 +42,28 @@ export default async function StudentsPage({ searchParams }: PageProps) {
   let schedules: any[] = [];
   let loadError = "";
 
-  // Guaranteed admin load: fetch direct tables without relying on fragile FK/embed queries.
-  // RLS still protects the page because /admin layout requires login.
+  const debugInfo = {
+    supabaseProject: shortProjectId(process.env.NEXT_PUBLIC_SUPABASE_URL),
+    academyId: academy?.id || "no-academy",
+    userEmail: "unknown",
+    directStudentsCount: null as number | null,
+    directStudentsError: "",
+    filteredStudentsCount: 0,
+  };
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  debugInfo.userEmail = user?.email || "no-user";
+
+  const directStudentsDebug = await supabase
+    .from("students")
+    .select("id", { count: "exact", head: true });
+
+  debugInfo.directStudentsCount = directStudentsDebug.count;
+  debugInfo.directStudentsError = directStudentsDebug.error?.message || "";
+
   let studentsRequest = supabase
     .from("students")
     .select("*")
@@ -44,9 +79,7 @@ export default async function StudentsPage({ searchParams }: PageProps) {
       supabase.from("classes").select("id, class_name"),
       supabase.from("subjects").select("id, subject_name"),
       supabase.from("teachers").select("id, full_name, teacher_code"),
-      supabase
-        .from("class_schedules")
-        .select("id, batch_name, start_time, end_time"),
+      supabase.from("class_schedules").select("id, batch_name, start_time, end_time"),
     ]);
 
   if (studentsRes.error) {
@@ -58,6 +91,7 @@ export default async function StudentsPage({ searchParams }: PageProps) {
   subjects = safeArray(subjectsRes.data);
   teachers = safeArray(teachersRes.data);
   schedules = safeArray(schedulesRes.data);
+  debugInfo.filteredStudentsCount = students.length;
 
   const classMap = new Map(classes.map((item: any) => [item.id, item]));
   const subjectMap = new Map(subjects.map((item: any) => [item.id, item]));
@@ -109,6 +143,18 @@ export default async function StudentsPage({ searchParams }: PageProps) {
       {loadError ? (
         <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">
           Students load error: {loadError}
+        </div>
+      ) : null}
+
+      {showDebug ? (
+        <div className="rounded-3xl border border-yellow-300 bg-yellow-50 p-4 text-xs text-yellow-900">
+          <p className="font-bold">Students Production Debug</p>
+          <p>Supabase Project: {debugInfo.supabaseProject}</p>
+          <p>User Email: {debugInfo.userEmail}</p>
+          <p>Academy ID: {debugInfo.academyId}</p>
+          <p>Direct Students Count: {String(debugInfo.directStudentsCount)}</p>
+          <p>Direct Students Error: {debugInfo.directStudentsError || "none"}</p>
+          <p>Loaded Students Count: {debugInfo.filteredStudentsCount}</p>
         </div>
       ) : null}
 
