@@ -10,6 +10,10 @@ type PageProps = {
   }>;
 };
 
+function safeArray<T = any>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 async function updateStudent(id: string, formData: FormData) {
   "use server";
 
@@ -52,17 +56,9 @@ export default async function StudentDetailPage({ params }: PageProps) {
     redirect("/admin/settings");
   }
 
-  const { data: student } = await supabase
+  const { data: student, error: studentError } = await supabase
     .from("students")
-    .select(
-      `
-      *,
-      classes(class_name),
-      subjects(subject_name),
-      teachers(full_name, teacher_code),
-      class_schedules(batch_name, start_time, end_time, monthly_fee)
-    `
-    )
+    .select("*")
     .eq("id", id)
     .eq("academy_id", academy.id)
     .maybeSingle();
@@ -76,7 +72,7 @@ export default async function StudentDetailPage({ params }: PageProps) {
         <div className="rounded-3xl border bg-white p-6 shadow-sm">
           <h1 className="text-2xl font-black text-slate-950">Student not found</h1>
           <p className="mt-2 text-sm text-slate-500">
-            Ye student record nahi mila ya is academy mein access available nahi.
+            {studentError?.message || "Ye student record nahi mila ya is academy mein access available nahi."}
           </p>
         </div>
       </div>
@@ -86,7 +82,7 @@ export default async function StudentDetailPage({ params }: PageProps) {
   const [feesRes, classesRes, subjectsRes, teachersRes, schedulesRes] = await Promise.all([
     supabase
       .from("fees")
-      .select("*, teachers(full_name, teacher_code), class_schedules(batch_name, start_time, end_time)")
+      .select("*")
       .eq("academy_id", academy.id)
       .eq("student_id", id)
       .order("fee_month", { ascending: false }),
@@ -107,30 +103,40 @@ export default async function StudentDetailPage({ params }: PageProps) {
       .order("full_name", { ascending: true }),
     supabase
       .from("class_schedules")
-      .select("id, batch_name, start_time, end_time, classes(class_name), teachers(full_name)")
+      .select("id, batch_name, start_time, end_time, monthly_fee")
       .eq("academy_id", academy.id)
       .order("created_at", { ascending: false }),
   ]);
 
-  const fees = Array.isArray(feesRes.data) ? feesRes.data : [];
-  const classes = Array.isArray(classesRes.data) ? classesRes.data : [];
-  const subjects = Array.isArray(subjectsRes.data) ? subjectsRes.data : [];
-  const teachers = Array.isArray(teachersRes.data) ? teachersRes.data : [];
-  const schedules = Array.isArray(schedulesRes.data) ? schedulesRes.data : [];
+  const fees = safeArray(feesRes.data);
+  const classes = safeArray(classesRes.data);
+  const subjects = safeArray(subjectsRes.data);
+  const teachers = safeArray(teachersRes.data);
+  const schedules = safeArray(schedulesRes.data);
 
-  const totalDue = fees.reduce((sum, fee: any) => sum + Number(fee.amount_due || 0), 0);
+  const classMap = new Map(classes.map((item: any) => [item.id, item]));
+  const subjectMap = new Map(subjects.map((item: any) => [item.id, item]));
+  const teacherMap = new Map(teachers.map((item: any) => [item.id, item]));
+  const scheduleMap = new Map(schedules.map((item: any) => [item.id, item]));
+
+  const classInfo: any = classMap.get(student.class_id);
+  const subjectInfo: any = subjectMap.get(student.subject_id);
+  const teacherInfo: any = teacherMap.get(student.teacher_id);
+  const scheduleInfo: any = scheduleMap.get(student.schedule_id);
+
+  const totalDue = fees.reduce((sum, fee: any) => sum + Number(fee.amount_due || fee.amount || 0), 0);
   const totalDiscount = fees.reduce((sum, fee: any) => sum + Number(fee.discount_amount || 0), 0);
   const totalPaid = fees.reduce((sum, fee: any) => sum + Number(fee.paid_amount || 0), 0);
   const totalPending = fees.reduce((sum, fee: any) => {
-    return sum + Math.max(Number(fee.amount_due || 0) - Number(fee.discount_amount || 0) - Number(fee.paid_amount || 0), 0);
+    return sum + Math.max(Number(fee.amount_due || fee.amount || 0) - Number(fee.discount_amount || 0) - Number(fee.paid_amount || 0), 0);
   }, 0);
   const paidCount = fees.filter((fee: any) => fee.status === "paid").length;
   const unpaidCount = fees.filter((fee: any) => fee.status !== "paid").length;
 
   const studentCode = student.student_code || makeStudentCode(student.id);
-  const scheduleText = student.class_schedules?.start_time
-    ? `${student.class_schedules.batch_name || "Regular"} • ${student.class_schedules.start_time} - ${student.class_schedules.end_time}`
-    : student.class_schedules?.batch_name || "-";
+  const scheduleText = scheduleInfo?.start_time
+    ? `${scheduleInfo.batch_name || "Regular"} • ${scheduleInfo.start_time} - ${scheduleInfo.end_time || ""}`
+    : scheduleInfo?.batch_name || "-";
 
   return (
     <div className="space-y-6">
@@ -193,9 +199,9 @@ export default async function StudentDetailPage({ params }: PageProps) {
             <Info label="Father name" value={student.father_name || "-"} />
             <Info label="Student phone" value={student.phone || "-"} />
             <Info label="Parent phone" value={student.guardian_phone || "-"} />
-            <Info label="Class" value={student.classes?.class_name || "-"} />
-            <Info label="Subject" value={student.subjects?.subject_name || "-"} />
-            <Info label="Teacher" value={student.teachers?.full_name || "-"} />
+            <Info label="Class" value={classInfo?.class_name || "-"} />
+            <Info label="Subject" value={subjectInfo?.subject_name || "-"} />
+            <Info label="Teacher" value={teacherInfo?.full_name || "-"} />
             <Info label="Batch / timing" value={scheduleText} />
             <Info label="Monthly fee" value={formatPKR(Number(student.monthly_fee || 0))} />
             <Info label="Admission date" value={formatDate(student.admission_date)} />
@@ -246,7 +252,7 @@ export default async function StudentDetailPage({ params }: PageProps) {
                 </tr>
               ) : (
                 fees.map((fee: any) => {
-                  const amount = Number(fee.amount_due || 0);
+                  const amount = Number(fee.amount_due || fee.amount || 0);
                   const discount = Number(fee.discount_amount || 0);
                   const paid = Number(fee.paid_amount || 0);
                   const balance = Math.max(amount - discount - paid, 0);
@@ -322,7 +328,7 @@ export default async function StudentDetailPage({ params }: PageProps) {
               <option value="">Select schedule</option>
               {schedules.map((schedule: any) => (
                 <option key={schedule.id} value={schedule.id}>
-                  {schedule.classes?.class_name || "Class"} • {schedule.teachers?.full_name || "Teacher"} • {schedule.batch_name || "Regular"} • {schedule.start_time || "?"}-{schedule.end_time || "?"}
+                  {schedule.batch_name || "Regular"} • {schedule.start_time || "?"}-{schedule.end_time || "?"}
                 </option>
               ))}
             </select>

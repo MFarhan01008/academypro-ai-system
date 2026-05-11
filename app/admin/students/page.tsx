@@ -9,6 +9,10 @@ type PageProps = {
   }>;
 };
 
+function safeArray<T = any>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : [];
+}
+
 export default async function StudentsPage({ searchParams }: PageProps) {
   const params = searchParams ? await searchParams : {};
   const query = (params.q || "").trim();
@@ -17,43 +21,62 @@ export default async function StudentsPage({ searchParams }: PageProps) {
   const { supabase, academy } = await getCurrentUserAndAcademy();
 
   let students: any[] = [];
+  let classes: any[] = [];
+  let subjects: any[] = [];
+  let teachers: any[] = [];
+  let schedules: any[] = [];
+  let loadError = "";
 
   if (academy?.id) {
-    let request = supabase
+    let studentsRequest = supabase
       .from("students")
-      .select(
-        `
-        *,
-        classes(class_name),
-        subjects(subject_name),
-        teachers(full_name, teacher_code),
-        class_schedules(batch_name, start_time, end_time)
-      `
-      )
+      .select("*")
       .eq("academy_id", academy.id)
       .order("created_at", { ascending: false });
 
     if (status !== "all") {
-      request = request.eq("status", status);
+      studentsRequest = studentsRequest.eq("status", status);
     }
 
-    const { data } = await request;
-    students = Array.isArray(data) ? data : [];
+    const [studentsRes, classesRes, subjectsRes, teachersRes, schedulesRes] =
+      await Promise.all([
+        studentsRequest,
+        supabase.from("classes").select("id, class_name").eq("academy_id", academy.id),
+        supabase.from("subjects").select("id, subject_name").eq("academy_id", academy.id),
+        supabase.from("teachers").select("id, full_name, teacher_code").eq("academy_id", academy.id),
+        supabase
+          .from("class_schedules")
+          .select("id, batch_name, start_time, end_time")
+          .eq("academy_id", academy.id),
+      ]);
+
+    if (studentsRes.error) {
+      loadError = studentsRes.error.message;
+    }
+
+    students = safeArray(studentsRes.data);
+    classes = safeArray(classesRes.data);
+    subjects = safeArray(subjectsRes.data);
+    teachers = safeArray(teachersRes.data);
+    schedules = safeArray(schedulesRes.data);
   }
+
+  const classMap = new Map(classes.map((item: any) => [item.id, item]));
+  const subjectMap = new Map(subjects.map((item: any) => [item.id, item]));
+  const teacherMap = new Map(teachers.map((item: any) => [item.id, item]));
+  const scheduleMap = new Map(schedules.map((item: any) => [item.id, item]));
 
   const filtered = query
     ? students.filter((student) => {
-        const searchText = `${student.full_name || ""} ${
-          student.father_name || ""
-        } ${student.student_code || ""} ${makeStudentCode(student.id)} ${
-          student.guardian_phone || ""
-        }`.toLowerCase();
+        const searchText = `${student.full_name || ""} ${student.father_name || ""} ${
+          student.student_code || ""
+        } ${makeStudentCode(student.id)} ${student.phone || ""} ${student.guardian_phone || ""}`.toLowerCase();
 
         return searchText.includes(query.toLowerCase());
       })
     : students;
 
-  const activeCount = students.filter((student) => student.status === "active").length;
+  const activeCount = students.filter((student) => (student.status || "active") === "active").length;
   const inactiveCount = students.filter(
     (student) => student.status && student.status !== "active"
   ).length;
@@ -82,6 +105,12 @@ export default async function StudentsPage({ searchParams }: PageProps) {
       {!academy?.id ? (
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-5 text-sm text-amber-800">
           Pehle Settings page par academy information save karo.
+        </div>
+      ) : null}
+
+      {loadError ? (
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-5 text-sm text-red-700">
+          Students load error: {loadError}
         </div>
       ) : null}
 
@@ -143,6 +172,13 @@ export default async function StudentsPage({ searchParams }: PageProps) {
               ) : (
                 filtered.map((student) => {
                   const studentCode = student.student_code || makeStudentCode(student.id);
+                  const classInfo = classMap.get(student.class_id);
+                  const subjectInfo = subjectMap.get(student.subject_id);
+                  const teacherInfo = teacherMap.get(student.teacher_id);
+                  const scheduleInfo = scheduleMap.get(student.schedule_id);
+                  const timingText = scheduleInfo?.start_time
+                    ? `${scheduleInfo.start_time} - ${scheduleInfo.end_time || ""}`
+                    : scheduleInfo?.batch_name || "-";
 
                   return (
                     <tr key={student.id} className="hover:bg-slate-50">
@@ -162,19 +198,15 @@ export default async function StudentsPage({ searchParams }: PageProps) {
                         </p>
                       </td>
 
-                      <td className="p-4">{student.classes?.class_name || "-"}</td>
-                      <td className="p-4">{student.subjects?.subject_name || "-"}</td>
+                      <td className="p-4">{classInfo?.class_name || "-"}</td>
+                      <td className="p-4">{subjectInfo?.subject_name || "-"}</td>
 
                       <td className="p-4">
-                        {student.teachers?.full_name || "-"}
-                        <p className="text-xs text-slate-500">
-                          {student.class_schedules?.start_time
-                            ? `${student.class_schedules.start_time} - ${student.class_schedules.end_time}`
-                            : student.class_schedules?.batch_name || "-"}
-                        </p>
+                        {teacherInfo?.full_name || "-"}
+                        <p className="text-xs text-slate-500">{timingText}</p>
                       </td>
 
-                      <td className="p-4">{student.guardian_phone || "-"}</td>
+                      <td className="p-4">{student.guardian_phone || student.phone || "-"}</td>
                       <td className="p-4">{formatPKR(Number(student.monthly_fee || 0))}</td>
 
                       <td className="p-4">
